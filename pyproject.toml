@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mmsim"
+version = "0.1.0"
+description = "Inventory-aware market making simulator (synthetic data only)"
+requires-python = ">=3.11"
+dependencies = ["numpy", "pandas", "matplotlib"]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+dashboard = ["rich"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
