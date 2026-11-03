@@ -1,5 +1,57 @@
 # mmsim: inventory-aware market making on synthetic data
 
+## At a glance
+
+A market-making simulator that runs two quoting strategies side by side on *identical*
+synthetic prices, fills and informed order flow: a **naive** maker that quotes
+symmetrically around the mid, and an **inventory-aware** one that skews its quotes against
+the position it is holding (Avellaneda-Stoikov style). Fills come from either the textbook
+exponential intensity model or a limit order book with queue position and partial fills,
+and a live dashboard lets you watch both strategies trade tick by tick.
+
+**Key results** (details and caveats in [Findings](#findings) and [Limitations](#limitations---read-before-quoting-any-number)):
+- Skewing has the higher Sharpe ratio at every point tested, including with no adverse
+  selection at all, where certainty-equivalent utility agrees.
+- On raw mean P&L, skewing *loses* at zero toxicity and wins once informed flow is
+  present; its advantage reaches **+34.80 per session** at the highest modelled toxicity
+  (queue model). The two statistics disagree, and that disagreement is itself a finding.
+- The textbook fill-rate model and a realistically deep order book cannot both be
+  satisfied: matching the exponential fill rate needs ~76% of market orders to sweep past
+  the best quote.
+- Correctness checks run throughout: the P&L identity `Pi = spread_pnl + inventory_pnl`
+  holds to 1e-9 or better, the live and batch engines agree session by session, and the
+  suite has 192 tests.
+
+![One session: midprice, the aware strategy's quotes and fills, inventory and P&L for both strategies](figures/single_session.png)
+
+*One session. The naive maker (blue) drifts to a large long position as the price falls;
+the aware maker (orange) skews its quotes to keep inventory near zero and ends ahead.*
+
+![Sharpe gap, mean P&L gap and per-strategy Sharpe as toxicity rises, under both fill models](figures/toxicity_sweep.png)
+
+*Aware minus naive as adverse selection rises (paired sessions, 95% bootstrap CIs). The
+Sharpe gap (left) stays positive throughout; the mean P&L gap (middle) starts negative and
+then grows steadily.*
+
+![The live dashboard's Stats tab after 40 completed sessions](figures/dashboard.png)
+
+*The live dashboard (Stats tab) after 40 sessions at default settings, seed 42. Over this
+short run the mean P&L gap (+4.68 ± 8.71) is still noise, while the risk statistics
+already separate clearly: Sharpe 5.49 vs 2.46, max |inventory| 27 vs 105.*
+
+**Where to look in the code:**
+- `src/mmsim/core.py`: the one-tick step function; all accounting lives here, shared by
+  both fill models and by the live and batch engines.
+- `src/mmsim/book.py` and `fills.py`: the limit order book with queue position, and the
+  exponential fill model.
+- `src/mmsim/strategies.py`: the naive / inventory-aware quoter and the exact
+  Avellaneda-Stoikov policy.
+- `src/mmsim/adverse.py`: hidden informed episodes, the model of adverse selection.
+- `scripts/live_dashboard.py`: the interactive dashboard (simulation in `live_sim.py`).
+- `tests/test_equivalence.py`: proves the live and batch engines agree exactly.
+
+To run it yourself, see [How to reproduce](#how-to-reproduce).
+
 ## Research question
 
 Does an inventory-aware market maker (quotes skewed against its inventory, `eta > 0`)
@@ -107,6 +159,8 @@ market-order rate 1:
 | 1.44 | 75.7% | 0.287 | (ii) |
 | >= 2 | >= 82% | above target | (ii) |
 
+![Fill rate against share of market orders sweeping the best quote, and the mean depth profile](figures/book_calibration.png)
+
 **No setting satisfies both.** The only (i)-satisfying point fills ~42x below target;
 reaching 0.227 requires ~76% of market orders to sweep past the best quote. Heavy tails do
 not rescue it: with a Pareto size tail (alpha=1.5, median MO = touch depth), the analytic
@@ -148,6 +202,8 @@ the realistic setting on identical draws:
 | 0.566 | 3.40 | -4.45 | -3.3% |
 | 2.263 | 1.68 | -8.56 | -9.5% |
 
+![Cost of losing queue priority against mid speed and against inventory skew](figures/fill_models.png)
+
 A quote survives 8.65 ticks at the slow end against 1.68 at the fast end, so queue
 position can only be BUILT when the mid is slow relative to the tick. But the P&L lost to
 losing it moves the opposite way: with a fast mid you are permanently at the back of the
@@ -187,6 +243,8 @@ sessions per point:
 | flow OFF (drift only) | -0.35 | 0.71 | 2.81 | 4.77 | 8.80 |
 | flow at its max modelled strength | 8.34 | 11.32 | 17.23 | 23.00 | 34.80 |
 
+![Paired P&L gap and Sharpe gap across drift strength, one line per flow strength](figures/toxicity_sweep_2d.png)
+
 **The P&L gap rises monotonically everywhere** - the main hypothesis (more toxicity, more
 valuable skewing) holds cleanly. The PRE-REGISTERED prediction was narrower and specific
 to Sharpe: that the queue model's Sharpe gap would rise more steeply than the exponential
@@ -218,6 +276,8 @@ against the simulator's own mechanics:
   since fills are iid Bernoulli when eta=0 - no continuum limit needed). The
   simulated/exact ratio stays at 0.987-1.015 across a 16x range of dt (N=50 to N=800)
   with no trend.
+
+![Exact expected P&L against half-spread, and the utility-dominance gap against discretisation](figures/closed_form_validation.png)
 
 **`gamma` (risk aversion) does not exist anywhere else in this project**, so it was
 back-solved, a stated convention and not a literature value: requiring the AS
@@ -268,6 +328,8 @@ A, k and delta show no sign change over the ranges tested. (Caveat: the fill-pro
 cap binds on up to 6.82% of quote-sides at the sigma/A extremes - trust the direction of
 those points more than their exact magnitude.)
 
+![Paired P&L gap and Sharpe gap against sigma, A, k, delta and eta](figures/sensitivity_sweep.png)
+
 ### 7. Skewing protects two ways: pricing the risk, and selecting against it (C2)
 Markout decomposes exactly: `markout_h = distance_captured + impact_h`. `distance_captured`
 (h-independent) is the static compensation charged at fill time - constant for naive, but
@@ -285,6 +347,8 @@ flow, not the strategy. At h=20 ticks, default toxicity:
 **Pure impact is negative on informed fills for every combination** - the flow really is
 adverse, independent of pricing - and more negative under the queue model at matched
 strategy, confirming Finding 3 fill-by-fill via a metric a real desk would compute.
+
+![Pure impact on informed and quiet fills, and fill-price markout on informed fills, by horizon](figures/markout_analysis.png)
 
 The first run of this analysis looked like a bug: aware's fill-price markout on informed
 fills came out POSITIVE and even exceeded its own quiet-fill markout. Checked for
@@ -445,13 +509,32 @@ statistic a given claim is being made on.**
 
 ## How to reproduce
 
+Requires Python 3.11 or newer. Set up once:
+
 ```
+git clone https://github.com/RaseemC/mm-simulator.git
 cd mm-simulator
+python -m venv .venv
+```
+
+Then, on macOS / Linux:
+
+```
+.venv/bin/pip install -e ".[dev]"
 .venv/bin/pytest -q                                            # 192 tests
 .venv/bin/python scripts/live_dashboard.py                     # live dashboard (intuition only)
 .venv/bin/python scripts/live_dashboard.py --exponential       # same, starting on the exponential fill model
 ```
-Select `.venv/bin/python` as the editor's interpreter, or it will flag `mmsim` imports.
+
+On Windows, the same commands with `.venv\Scripts\` in place of `.venv/bin/`:
+
+```
+.venv\Scripts\pip install -e ".[dev]"
+.venv\Scripts\pytest -q
+.venv\Scripts\python scripts\live_dashboard.py
+```
+
+Select the `.venv` Python as the editor's interpreter, or it will flag `mmsim` imports.
 
 Every script below is seeded and prints a full report to stdout; the only files written
 are the named PNGs under `figures/`.
@@ -473,3 +556,7 @@ script; defaults above match what is reported in this README. `docs/DESIGN_NOTES
 the full numeric tables, every weakness noted per-component, and the process lessons
 (mutation-testing pitfalls, a counterfactual sign bug, a memory-allocation fix) this
 project's own mistakes surfaced along the way.
+
+---
+
+© 2026 Raseem Chowdhury
